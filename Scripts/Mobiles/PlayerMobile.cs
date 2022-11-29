@@ -242,7 +242,9 @@ namespace Server.Mobiles
 
         private int m_GuildMessageHue, m_AllianceMessageHue;
 
-        private List<Mobile> m_AutoStabled;
+		private int? m_AllowAutoLoot, m_ShowAutoLootMessages, m_ShareAutoLootWithParty;
+
+		private List<Mobile> m_AutoStabled;
         private List<Mobile> m_AllFollowers;
         private List<Mobile> m_RecentlyReported;
 
@@ -398,7 +400,46 @@ namespace Server.Mobiles
         [CommandProperty(AccessLevel.GameMaster)]
         public int Profession { get { return m_Profession; } set { m_Profession = value; } }
 
-        public int StepsTaken { get; set; }
+		[CommandProperty(AccessLevel.Player)]
+		public bool AllowAutoLoot
+		{
+			get
+			{
+				return (m_AllowAutoLoot ?? 1) > 0 ? true : false;
+			}
+			set
+			{
+				m_AllowAutoLoot = value ? 1 : 0;
+			}
+		}
+
+		[CommandProperty(AccessLevel.Player)]
+		public bool ShowAutoLootMessages
+		{
+			get
+			{
+				return (m_ShowAutoLootMessages ?? 1) > 0 ? true : false;
+			}
+			set
+			{
+				m_ShowAutoLootMessages = value ? 1 : 0;
+			}
+		}
+
+		[CommandProperty(AccessLevel.Player)]
+		public bool ShareAutoLootWithParty
+		{
+			get
+			{
+				return (m_ShareAutoLootWithParty ?? 1) > 0 ? true : false;
+			}
+			set
+			{
+				m_ShareAutoLootWithParty = value ? 1 : 0;
+			}
+		}
+
+		public int StepsTaken { get; set; }
 
         [CommandProperty(AccessLevel.GameMaster)]
         public NpcGuild NpcGuild { get { return m_NpcGuild; } set { m_NpcGuild = value; } }
@@ -4237,7 +4278,12 @@ namespace Server.Mobiles
 
             switch (version)
             {
-                case 42: // upgraded quest serialization
+				case 43: // auto loot flags
+					m_AllowAutoLoot = reader.ReadInt();
+					m_ShowAutoLootMessages = reader.ReadInt();
+					m_ShareAutoLootWithParty = reader.ReadInt();
+					goto case 42;
+				case 42: // upgraded quest serialization
                 case 41: // removed PeacedUntil - no need to serialize this
                 case 40: // Version 40, moved gauntlet points, virtua artys and TOT convert to PointsSystem
                 case 39: // Version 39, removed ML quest save/load
@@ -4705,9 +4751,12 @@ namespace Server.Mobiles
 
             base.Serialize(writer);
 
-            writer.Write(42); // version
+			writer.Write(43); // version
+			writer.Write(m_AllowAutoLoot ?? 1);
+			writer.Write(m_ShowAutoLootMessages ?? 1);
+			writer.Write(m_ShareAutoLootWithParty ?? 1);
 
-            writer.Write(NextGemOfSalvationUse);
+			writer.Write(NextGemOfSalvationUse);
 
             writer.Write((int)m_ExtendedFlags);
 

@@ -7,6 +7,8 @@ using Server.Guilds;
 using Server.Misc;
 using Server.Mobiles;
 using Server.Network;
+using Server.Services.ContainerSort;
+using Server.Services.ContainerSort.ItemIdentification;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -107,7 +109,11 @@ namespace Server.Items
 
         public static readonly TimeSpan InstancedCorpseTime = TimeSpan.FromMinutes(3.0);
 
-        [CommandProperty(AccessLevel.GameMaster)]
+		private static readonly bool AllowItemAutoLoot = Config.Get("QualityOfLifeFeatures.AllowItemAutoLoot", false);
+
+		private static readonly bool AllowGoldAutoLoot = Config.Get("QualityOfLifeFeatures.AllowGoldAutoLoot", false);
+
+		[CommandProperty(AccessLevel.GameMaster)]
         public virtual bool InstancedCorpse => DateTime.UtcNow < TimeOfDeath + InstancedCorpseTime;
 
         private Dictionary<Item, InstancedItemInfo> m_InstancedItems;
@@ -200,7 +206,9 @@ namespace Server.Items
                 return;
             }
 
-            if (m_InstancedItems == null)
+			items = AutoLootItems(items.ToList(), this);
+
+			if (m_InstancedItems == null)
             {
                 m_InstancedItems = new Dictionary<Item, InstancedItemInfo>();
             }
@@ -458,11 +466,14 @@ namespace Server.Items
         {
             var c = new Corpse(owner, hair, facialhair, equipItems);
 
-            owner.Corpse = c;
+			var corpseContent = AutoLootGold(initialContent, c);
+			corpseContent = AutoLootItems(corpseContent, c);
 
-            for (int i = 0; i < initialContent.Count; ++i)
+			owner.Corpse = c;
+
+            for (int i = 0; i < corpseContent.Count; ++i)
             {
-                Item item = initialContent[i];
+                Item item = corpseContent[i];
 
                 if (owner.Player && item.Parent == owner.Backpack)
                 {
@@ -506,7 +517,112 @@ namespace Server.Items
             return c;
         }
 
-        public override bool IsPublicContainer => false;
+		private static List<Item> AutoLootItems(List<Item> initialContent, Corpse corpse)
+		{
+			if (initialContent == null)
+			{
+				return null;
+			}
+
+			var remainingContent = new List<Item>();
+			remainingContent.AddRange(initialContent);
+
+			if (AllowItemAutoLoot && !(corpse.Owner is PlayerMobile))
+			{
+				var players = corpse?.Aggressors?.FindAll(a => a is PlayerMobile)?.Select(a => a as PlayerMobile)?.ToList() ?? new List<PlayerMobile>();
+
+				if (players.Count == 1)
+				{
+					var sortItems = players[0].Backpack.GetAllSortItemTypesIncludingSubcontainers();
+
+					foreach(var item in initialContent)
+					{
+						if (ItemIdentificationRulesFactory.IsItemOfSortItemTypes(item, sortItems))
+						{
+							players[0].AddToBackpack(item);
+							remainingContent = remainingContent.FindAll(i => i != item);
+						}
+					}
+				}
+			}
+
+			return remainingContent;
+		}
+
+		private static List<Item> AutoLootGold(List<Item> initialContent, Corpse corpse)
+		{
+			if (initialContent == null)
+			{
+				return null;
+			}
+
+			var remainingContent = new List<Item>();
+			remainingContent.AddRange(initialContent);
+
+			if (AllowGoldAutoLoot && !(corpse.Owner is PlayerMobile))
+			{
+				var goldAmount = initialContent?.FindAll(i => i is Gold)?.Sum(i => i.Amount) ?? 0;
+				var players = corpse?.Aggressors?.FindAll(a => a is PlayerMobile)?.Select(a => a as PlayerMobile)?.ToList() ?? new List<PlayerMobile>();
+
+				if (goldAmount > 0 && players.All(p => p.AllowAutoLoot))
+				{
+					if (players.All(p => p.ShareAutoLootWithParty))
+					{
+						var parties = new List<Party>();
+
+						foreach (var player in players)
+						{
+							Party party = Party.Get(player);
+
+							if (party != null && !parties.Contains(party))
+							{
+								parties.Add(party);
+							}
+						}
+
+						foreach (var party in parties)
+						{
+							var partyPlayers = party?.Members?.FindAll(m => m.Mobile is PlayerMobile &&
+																	   !players.Contains(m.Mobile as PlayerMobile))
+															 ?.Select(m => m.Mobile as PlayerMobile)?.ToList()
+															 ?? new List<PlayerMobile>();
+							players.AddRange(partyPlayers);
+						}
+					}
+
+					if((players?.Count() ?? 0) > 0)
+					{
+						//every player gets the same amount so the remainder is lost
+						int goldPerPlayer = (goldAmount - (goldAmount % players.Count())) / players.Count();
+
+						foreach (var player in players)
+						{
+							var gold = new Gold(goldPerPlayer);
+							player.AddToBackpack(gold);
+
+							if (player.ShowAutoLootMessages)
+							{
+								if (players.Count() > 1)
+								{
+									player.SendMessage($"Your share of the gold from killing {corpse.Owner.Name} is {goldPerPlayer} gold.");
+								}
+								else
+								{
+									player.SendMessage($"You loot the corpse of {corpse.Owner.Name} and place {goldPerPlayer} gold in your backpack.");
+								}
+							}
+						}
+
+						initialContent.FindAll(i => i is Gold).ForEach(i => i.Delete());
+						remainingContent = remainingContent.FindAll(i => !(i is Gold));
+					}					
+				}
+			}
+
+			return remainingContent;
+		}
+
+		public override bool IsPublicContainer => false;
 
         public Corpse(Mobile owner, List<Item> equipItems)
             : this(owner, null, null, equipItems)
